@@ -1,0 +1,124 @@
+#include <SoftwareSerial.h>
+#include <TimerOne.h>
+
+const int statePin = 8;           // HC-05 STATE pin connected to digital pin 2
+const int ledPin = 9;             // External LED connected to digital pin 9
+unsigned long previousMillis = 0; // Stores last time the LED was updated
+int blinkPhase = 0; // Tracks the phase of the blinking pattern
+bool ledState = LOW; // Current state of the LED
+
+
+
+
+SoftwareSerial BTSerial(11, 10);  // RX | TX
+//int counter =0;
+// Global variables for multiple sensors
+const int numSensors = 6;
+const int analogPins[numSensors] = { A0, A1, A2, A3, A4, A5 };
+unsigned int clk[numSensors] = { 0 };
+unsigned int k[numSensors] = { 0 };
+int sample[numSensors] = { 0 };
+int last_sample[numSensors] = { 512, 512, 512, 512, 512, 512 };
+int ds[numSensors] = { 0 };
+long int S[numSensors] = { 0 };
+unsigned int EMG_level[numSensors] = { 0 };
+long ACC[numSensors] = { 0L };
+int MAv[numSensors][20] = { { 0 } };
+volatile bool newData = false;  // Flag to indicate new data is ready for any sensor
+
+void EMG_LE() {
+  for (int i = 0; i < numSensors; i++) {
+    sample[i] = analogRead(analogPins[i]);
+    ds[i] = sample[i] - last_sample[i];
+    S[i] = S[i] - MAv[i][k[i]] + ds[i];
+    MAv[i][k[i]] = ds[i];
+    k[i] = (k[i] + 1) % 20;
+    ACC[i] = ACC[i] + abs(S[i]);
+    last_sample[i] = sample[i];
+    clk[i]++;
+
+    if (clk[i] >= 128) {
+      EMG_level[i] = ACC[i] >> 7;
+      ACC[i] = 0;
+      clk[i] = 0;
+      newData = true;  // Set the flag to indicate new data is ready
+    }
+  }
+}
+
+void setup() {
+  BTSerial.begin(9600);
+  Serial.begin(9600);
+  pinMode(statePin, INPUT);  // Set the HC-05 STATE pin as input
+  pinMode(ledPin, OUTPUT);   // Set the LED pin as output
+  for (int i = 0; i < numSensors; i++) {
+    pinMode(analogPins[i], INPUT);
+  }
+
+  Timer1.initialize(1000);  // Set timer to fire every 1ms (1000us)
+  Timer1.attachInterrupt(EMG_LE);
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  bool isConnected = digitalRead(statePin); // Read the connection status from the HC-05
+
+  if (isConnected) {
+    // Connected state with double blink pattern
+    switch (blinkPhase) {
+      case 0:
+        if (currentMillis - previousMillis >= 200) {
+          digitalWrite(ledPin, LOW); // Turn LED off
+          previousMillis = currentMillis;
+          blinkPhase = 1;
+        }
+        break;
+      case 1:
+        if (currentMillis - previousMillis >= 100) {
+          digitalWrite(ledPin, HIGH); // Turn LED on for the second blink
+          previousMillis = currentMillis;
+          blinkPhase = 2;
+        }
+        break;
+      case 2:
+        if (currentMillis - previousMillis >= 200) {
+          digitalWrite(ledPin, LOW); // Turn LED off after second blink
+          previousMillis = currentMillis;
+          blinkPhase = 3;
+        }
+        break;
+      case 3:
+        if (currentMillis - previousMillis >= 3000) { // Long pause after double blink
+          digitalWrite(ledPin, HIGH); // Start first blink of next cycle
+          previousMillis = currentMillis;
+          blinkPhase = 0; // Reset for next double blink cycle
+        }
+        break;
+    }
+  } else {
+    // Searching state blink pattern
+    if (currentMillis - previousMillis >= (ledState ? 200 : 200)) { // Toggle every 200 ms
+      digitalWrite(ledPin, ledState = !ledState); // Toggle LED state
+      previousMillis = currentMillis;
+      if (ledState == HIGH) blinkPhase = 0; // Ensure double blink restarts correctly
+    }
+  }
+
+  if (newData) {
+    for (int i = 0; i < numSensors; i++) {
+
+      //Serial.print(counter);
+      //counter=counter+1;
+      Serial.print(EMG_level[i]);
+      BTSerial.print(EMG_level[i]);  // Send EMG_level
+      if (i != 5) {
+        BTSerial.print("/");
+        Serial.print("/");
+      } else {
+        Serial.print("\n");
+        BTSerial.print("\n");
+      }
+    }
+    newData = false;  // Reset the flag
+  }
+}
